@@ -3,9 +3,10 @@ use std::os::raw::{c_char, c_void};
 use std::rc::Rc;
 
 use crate::HaffmanNode::{Leaf, Node};
+use std::ops::Sub;
+use std::mem::swap;
 
 fn main() {
-    make_image();
     let row = fetch_row();
     let slice = &row[..];
 
@@ -15,7 +16,8 @@ fn main() {
 
     println!("Source alphabet: {:?}", alphabet.as_slice());
     println!("Alphabet length: {:?}", alphabet.len());
-    println!("Entropy: {:?}\n", calc_entropy(alphabet.as_slice()));
+    let entropy = calc_entropy(alphabet.as_slice());
+    println!("Entropy: {:?}\n", entropy);
     let simple_dict = make_simple_dict(alphabet.as_slice());
     println!("Average minimal binary code length: {}\n", average_min_binary_code(alphabet.as_slice()));
 
@@ -40,14 +42,17 @@ fn main() {
     println!();
     print!("Shennon encoded sequence: ");
     let shenon_len = encode_sequence(&row[..], shennon_dict.as_slice(), alphabet.as_slice());
+    println!("Shennon redundancy: {}", 1f32 - entropy * 128f32 / shenon_len as f32);
     println!("Shennon length: {}\n", shenon_len);
 
     print!("Haffman encoded sequence: ");
     let haffman_len = encode_sequence(&row[..], haffman_dict.as_slice(), alphabet.as_slice());
+    println!("Haffman redundancy: {}", 1f32 - entropy * 128f32 / haffman_len as f32);
     println!("Haffman length: {}\n", haffman_len);
 
     print!("Simple encoded sequence: ");
     let simple_len = encode_sequence(&row[..], simple_dict.as_slice(), alphabet.as_slice());
+    println!("Simple redundancy: {}", 1f32 - entropy * 128f32 / simple_len as f32);
     println!("Simple length: {}\n", simple_len);
 }
 
@@ -99,8 +104,8 @@ fn make_haffman_dict(alphabet: &[(u8, u8)]) -> Vec<String> {
 }
 
 fn do_haffman_dict(node: Rc<HaffmanNode>, alphabet: &[(u8, u8)], current_prefix: &str, current_indent: &str, result: &mut [String]) {
-    if let Leaf(_, index) = *node {
-        println!("{} -V ({}) -- {}", current_indent, alphabet[index].0, current_prefix);
+    if let Leaf(weight, index) = *node {
+        println!("{} -V ({}) ({}) -- {}", current_indent, weight, alphabet[index].0, current_prefix);
         result[index] = current_prefix.to_string();
         return;
     }
@@ -131,13 +136,18 @@ fn make_haffman_tree(nodes: &mut Vec<Rc<HaffmanNode>>) -> Rc<HaffmanNode> {
             Leaf(w, _) => w,
             Node(w, _, _) => w,
         };
-        if min1 == 0 {
-            min1 = weight;
-            min1i = i;
-            continue;
-        } else if min2 == 0 {
+        print!("{} ", weight);
+        if min2 == 0 {
             min2 = weight;
             min2i = i;
+            continue;
+        } else if min1 == 0 {
+            min1 = weight;
+            min1i = i;
+            if min1 < min2 {
+                swap(&mut min1, &mut min2);
+                swap(&mut min1i, &mut min2i);
+            }
             continue;
         }
 
@@ -155,6 +165,7 @@ fn make_haffman_tree(nodes: &mut Vec<Rc<HaffmanNode>>) -> Rc<HaffmanNode> {
     let first = nodes[min1i].clone();
     let second = nodes[min2i].clone();
 
+    println!("\nMerging {} and {}", min1, min2);
     nodes.remove(min1i);
     if min2i > min1i {
         nodes.remove(min2i - 1);
@@ -183,9 +194,15 @@ fn make_haffman_tree(nodes: &mut Vec<Rc<HaffmanNode>>) -> Rc<HaffmanNode> {
 
 
 fn print_dict(dict: &[String], alphabet: &[(u8, u8)]) {
+    let mut sum = 0f32;
     for i in 0..dict.len() {
-        println!("  {} == {}", alphabet[i].0, dict[i])
+        let code = dict[i].as_str();
+        println!("  {} == {}", alphabet[i].0, code);
+
+        sum += code.len() as f32;
     }
+
+    println!("  Average code length: {}", sum / alphabet.len() as f32)
 }
 
 fn build_shennon_tree(
@@ -222,7 +239,7 @@ fn build_shennon_tree(
 
 fn make_simple_dict(alphabet: &[(u8, u8)]) -> Vec<String> {
     println!("Binary codes:");
-    let len = calc_minimum_binary_code(alphabet.len() as u8);
+    let len = calc_minimum_binary_code((alphabet.len() - 1) as u8);
     let mut result = Vec::<String>::new();
     for i in 0..alphabet.len() {
         let element = alphabet[i];
@@ -290,7 +307,10 @@ fn make_image() {
         }
         for x in 0..128 {
             for y in 0..128 {
-                BMP_SetPixelIndex(bmp, x, y, (x + y) as u8);
+                let x_dist = x as i32 - 64;
+                let y_dist = y as i32 - 64;
+                let distance = ((x_dist * x_dist + y_dist * y_dist) as f64).sqrt() as f32;
+                BMP_SetPixelIndex(bmp, x, y, ((distance.sin() + 1f32) * 128f32) as u8);
             }
         }
         BMP_WriteFile(bmp, "image.bmp\0".as_ptr());
